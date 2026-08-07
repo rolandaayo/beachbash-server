@@ -8,8 +8,17 @@ const JWT_EXPIRES_IN = "7d";
 const users = [];
 
 // ── Helper: generate token ───────────────────────────────────────────────────
-function signToken(userId) {
-  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+function signToken(userId, user) {
+  return jwt.sign(
+    {
+      userId,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+    },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_IN },
+  );
 }
 
 // ── Helper: safe user shape (no passwordHash) ────────────────────────────────
@@ -62,7 +71,7 @@ async function register(req, res) {
 
   users.push(user);
 
-  const token = signToken(user.id);
+  const token = signToken(user.id, user);
 
   console.log(`[AUTH] New user registered: ${user.email} (${user.id})`);
 
@@ -90,7 +99,7 @@ async function login(req, res) {
     return res.status(401).json({ error: "Invalid email or password" });
   }
 
-  const token = signToken(user.id);
+  const token = signToken(user.id, user);
 
   console.log(`[AUTH] User logged in: ${user.email}`);
 

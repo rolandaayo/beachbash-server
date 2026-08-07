@@ -1,41 +1,78 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const http = require("http");
+const { Server } = require("socket.io");
+const mongoose = require("mongoose");
+
 const authRoutes = require("./routes/auth");
+const chatRoutes = require("./routes/chat");
 
 const app = express();
+const server = http.createServer(app);
 const PORT = process.env.PORT || 4000;
+const MONGO_URI = process.env.MONGO_URI || "";
 
+// ── Socket.io ─────────────────────────────────────────────────────────────────
+const io = new Server(server, {
+  cors: {
+    origin: ["http://localhost:3000"],
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
+});
+
+app.set("io", io);
+
+io.on("connection", (socket) => {
+  console.log(`[SOCKET] connected: ${socket.id}`);
+
+  // User joins their personal room to receive admin replies
+  socket.on("join_user", (userId) => {
+    socket.join(`user_${userId}`);
+    console.log(`[SOCKET] user joined room: user_${userId}`);
+  });
+
+  // Admin joins the admin room to receive all new messages
+  socket.on("join_admin", () => {
+    socket.join("admin");
+    console.log(`[SOCKET] admin joined`);
+  });
+
+  socket.on("disconnect", () => {
+    console.log(`[SOCKET] disconnected: ${socket.id}`);
+  });
+});
+
+// ── Middleware ────────────────────────────────────────────────────────────────
 app.use(express.json());
 app.use(
   cors({
     origin: ["http://localhost:3000"],
-    methods: ["GET", "POST"],
+    methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true,
   }),
 );
 
-// In-memory order store (replace with a DB later)
-const orders = [];
-
-// ── Auth routes ──────────────────────────────────────────────────────────────
+// ── Routes ────────────────────────────────────────────────────────────────────
 app.use("/api/auth", authRoutes);
+app.use("/api/chat", chatRoutes);
 
-// ── Health check ────────────────────────────────────────────────────────────
+// ── Health check ──────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.json({ status: "ok", message: "BEACHBASH API running 🏖️" });
 });
 
-// ── GET /api/orders — list all orders ───────────────────────────────────────
+// ── In-memory order store (replace with DB later) ─────────────────────────────
+const orders = [];
+
 app.get("/api/orders", (req, res) => {
   res.json({ orders });
 });
 
-// ── POST /api/orders — place a new order ────────────────────────────────────
 app.post("/api/orders", (req, res) => {
   const { customer, tickets, total } = req.body;
 
-  // Basic validation
   if (
     !customer ||
     !tickets ||
@@ -54,15 +91,12 @@ app.post("/api/orders", (req, res) => {
     }
   }
 
-  // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(customer.email)) {
     return res.status(400).json({ error: "Invalid email address" });
   }
 
-  // Generate order ID
   const orderId = `BB-${Date.now().toString(36).toUpperCase()}`;
-
   const order = {
     orderId,
     customer: {
@@ -78,9 +112,8 @@ app.post("/api/orders", (req, res) => {
   };
 
   orders.push(order);
-
   console.log(
-    `[ORDER] New order placed: ${orderId} — ₦${total.toLocaleString()} — ${customer.email}`,
+    `[ORDER] ${orderId} — ₦${total.toLocaleString()} — ${customer.email}`,
   );
 
   res.status(201).json({
@@ -91,20 +124,33 @@ app.post("/api/orders", (req, res) => {
   });
 });
 
-// ── GET /api/orders/:id — get order by ID ───────────────────────────────────
 app.get("/api/orders/:id", (req, res) => {
   const order = orders.find((o) => o.orderId === req.params.id);
-  if (!order) {
-    return res.status(404).json({ error: "Order not found" });
-  }
+  if (!order) return res.status(404).json({ error: "Order not found" });
   res.json({ order });
 });
 
-// ── 404 fallback ─────────────────────────────────────────────────────────────
+// ── 404 fallback ──────────────────────────────────────────────────────────────
 app.use((req, res) => {
   res.status(404).json({ error: "Route not found" });
 });
 
-app.listen(PORT, () => {
-  console.log(`🏖️  BEACHBASH API running on http://localhost:${PORT}`);
-});
+// ── Start ─────────────────────────────────────────────────────────────────────
+async function start() {
+  if (MONGO_URI) {
+    try {
+      await mongoose.connect(MONGO_URI);
+      console.log("🍃 MongoDB connected");
+    } catch (err) {
+      console.error("MongoDB connection error:", err.message);
+    }
+  } else {
+    console.warn("⚠️  MONGO_URI not set — chat persistence disabled");
+  }
+
+  server.listen(PORT, () => {
+    console.log(`🏖️  BEACHBASH API running on http://localhost:${PORT}`);
+  });
+}
+
+start();
