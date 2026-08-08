@@ -17,8 +17,12 @@ function authenticate(req, res, next) {
 
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    // Attach a minimal user object; controllers can enrich this as needed
-    req.user = { id: payload.userId };
+    req.user = {
+      id: payload.userId,
+      email: payload.email,
+      firstName: payload.firstName,
+      lastName: payload.lastName,
+    };
     next();
   } catch (err) {
     return res.status(401).json({ error: "Invalid or expired token" });
