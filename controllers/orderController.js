@@ -157,6 +157,19 @@ async function updateOrderStatus(req, res) {
   if (status === "paid" && !order.paidAt) order.paidAt = new Date();
   await order.save();
 
+  if (status === "paid") {
+    const io = req.app.get("io");
+    if (io) {
+      io.to("admin").emit("order_paid", {
+        orderId: order.orderId,
+        total: order.total,
+        customer: order.customer,
+        paidAt: order.paidAt,
+        paystackRef: order.paystackRef,
+      });
+    }
+  }
+
   res.json({ order });
 }
 

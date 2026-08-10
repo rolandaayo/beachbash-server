@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
+    "seed": "node scripts/seed.js",
+    "seed:fresh": "node scripts/seed.js --fresh",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
