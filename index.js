@@ -17,9 +17,20 @@ const PORT = process.env.PORT || 4000;
 const MONGO_URI = process.env.MONGO_URI || "";
 const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000";
 
+const ALLOWED_ORIGINS = [
+  CLIENT_URL,
+  "https://www.beachbashparty.com",
+  "https://beachbashparty.com",
+  "http://localhost:3000",
+].filter(Boolean);
+
 // ── Socket.io ─────────────────────────────────────────────────────────────────
 const io = new Server(server, {
-  cors: { origin: [CLIENT_URL], methods: ["GET", "POST"], credentials: true },
+  cors: {
+    origin: ALLOWED_ORIGINS,
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
 });
 app.set("io", io);
 
@@ -39,8 +50,8 @@ app.post(
 app.use(express.json());
 app.use(
   cors({
-    origin: [CLIENT_URL],
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    origin: ALLOWED_ORIGINS,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
   }),
 );
