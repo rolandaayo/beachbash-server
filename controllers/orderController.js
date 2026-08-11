@@ -53,15 +53,23 @@ async function createOrder(req, res) {
     createdAt: new Date().toISOString(),
   };
 
-  // Hold in memory — do NOT save to DB yet
-  pendingOrders.set(orderId, orderData);
+  // Save to DB immediately as pending_payment
+  // Webhook will update to 'paid' in production
+  // On localhost, client onSuccess calls PATCH /status manually
+  await Order.create({
+    orderId,
+    userId,
+    customer: orderData.customer,
+    tickets,
+    total,
+    status: "pending_payment",
+  });
 
-  // Auto-evict after TTL
+  // Also keep in memory for webhook lookup
+  pendingOrders.set(orderId, orderData);
   setTimeout(() => pendingOrders.delete(orderId), PENDING_TTL_MS);
 
-  console.log(
-    `[ORDER] Pending (not saved): ${orderId} — ₦${total.toLocaleString()}`,
-  );
+  console.log(`[ORDER] Created: ${orderId} — ₦${total.toLocaleString()}`);
 
   // ── Init Paystack transaction ────────────────────────────────────────────
   let paystackData = null;
@@ -161,12 +169,39 @@ async function paystackWebhook(req, res) {
 
     // Avoid double-processing
     const existing = await Order.findOne({ orderId: reference });
-    if (existing) {
-      console.log(`[PAYSTACK] Already processed: ${reference}`);
+    if (existing && existing.status === "paid") {
+      console.log(`[PAYSTACK] Already paid: ${reference}`);
       return res.sendStatus(200);
     }
 
-    // Retrieve the pending order data
+    // If order exists (saved on creation), update it to paid
+    if (existing) {
+      existing.status = "paid";
+      existing.paystackRef = reference;
+      existing.paystackChannel = data.channel;
+      existing.paidAt = new Date();
+      await existing.save();
+      const order = existing;
+
+      pendingOrders.delete(reference);
+      console.log(`[PAYSTACK] Payment confirmed (updated): ${order.orderId}`);
+      sendTicketEmail(order).catch((err) =>
+        console.error("[MAIL] Ticket email failed:", err.message),
+      );
+      const io = req.app.get("io");
+      if (io) {
+        io.to("admin").emit("order_paid", {
+          orderId: order.orderId,
+          total: order.total,
+          customer: order.customer,
+          paidAt: order.paidAt,
+          paystackRef: order.paystackRef,
+        });
+      }
+      return res.sendStatus(200);
+    }
+
+    // Fallback: order not in DB yet — create from pending memory or webhook data
     const pending = pendingOrders.get(reference);
 
     if (!pending) {
@@ -258,7 +293,7 @@ async function deleteOrder(req, res) {
 
 // ── PATCH /api/orders/:id/status (admin manual override) ────────────────────
 async function updateOrderStatus(req, res) {
-  const { status } = req.body;
+  const { status, paystackRef } = req.body;
   const valid = ["pending_payment", "paid", "failed", "refunded"];
   if (!valid.includes(status)) {
     return res.status(400).json({ error: "Invalid status" });
@@ -269,6 +304,7 @@ async function updateOrderStatus(req, res) {
 
   order.status = status;
   if (status === "paid" && !order.paidAt) order.paidAt = new Date();
+  if (paystackRef) order.paystackRef = paystackRef;
   await order.save();
 
   if (status === "paid") {
