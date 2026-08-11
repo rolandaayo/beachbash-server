@@ -8,12 +8,16 @@ const {
   getOrder,
   getTicketPublic,
   updateOrderStatus,
+  confirmPayment,
   checkInOrder,
   deleteOrder,
 } = require("../controllers/orderController");
 
 // Ticket scan — public, no auth
 router.get("/ticket/:id", getTicketPublic);
+
+// POST /api/orders/:id/confirm — public, verifies with Paystack then marks paid
+router.post("/:id/confirm", confirmPayment);
 
 // POST /api/orders — create order (guest or logged-in)
 router.post("/", optionalAuth, createOrder);

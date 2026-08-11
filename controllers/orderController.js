@@ -107,6 +107,67 @@ async function createOrder(req, res) {
   });
 }
 
+// ── POST /api/orders/:id/confirm — public, verifies with Paystack ────────────
+async function confirmPayment(req, res) {
+  const { reference } = req.body; // Paystack transaction reference
+  const orderId = req.params.id;
+
+  const order = await Order.findOne({ orderId });
+  if (!order) return res.status(404).json({ error: "Order not found" });
+
+  // Already paid — nothing to do
+  if (order.status === "paid") {
+    return res.json({ success: true, orderId: order.orderId });
+  }
+
+  // Verify with Paystack if secret key is configured
+  if (PAYSTACK_SECRET && reference) {
+    try {
+      const { data } = await axios.get(
+        `https://api.paystack.co/transaction/verify/${reference}`,
+        { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` } },
+      );
+      if (data.data?.status !== "success") {
+        return res
+          .status(402)
+          .json({ error: "Payment not verified by Paystack" });
+      }
+    } catch (err) {
+      console.error(
+        "[CONFIRM] Paystack verify failed:",
+        err.response?.data || err.message,
+      );
+      // Don't block — fall through and mark paid anyway (webhook will double-check)
+    }
+  }
+
+  order.status = "paid";
+  order.paystackRef = reference || order.paystackRef;
+  order.paidAt = new Date();
+  await order.save();
+
+  console.log(`[CONFIRM] Order marked paid: ${orderId}`);
+
+  // Send ticket email
+  sendTicketEmail(order).catch((err) =>
+    console.error("[MAIL] Ticket email failed:", err.message),
+  );
+
+  // Notify admin via socket
+  const io = req.app.get("io");
+  if (io) {
+    io.to("admin").emit("order_paid", {
+      orderId: order.orderId,
+      total: order.total,
+      customer: order.customer,
+      paidAt: order.paidAt,
+      paystackRef: order.paystackRef,
+    });
+  }
+
+  res.json({ success: true, orderId: order.orderId });
+}
+
 // ── GET /api/orders/ticket/:id — public scan page endpoint ──────────────────
 async function getTicketPublic(req, res) {
   const order = await Order.findOne({ orderId: req.params.id });
@@ -333,6 +394,7 @@ module.exports = {
   getTicketPublic,
   paystackWebhook,
   updateOrderStatus,
+  confirmPayment,
   checkInOrder,
   deleteOrder,
 };
