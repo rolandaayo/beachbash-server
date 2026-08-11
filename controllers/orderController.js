@@ -85,7 +85,7 @@ async function createOrder(req, res) {
             orderId,
             name: `${orderData.customer.firstName} ${orderData.customer.lastName}`,
           },
-          callback_url: `${process.env.CLIENT_URL || "http://localhost:3000"}/confirmation?orderId=${orderId}`,
+          callback_url: `${process.env.CLIENT_URL || "http://localhost:3000"}/confirmation?orderId=${orderId}&paid=1`,
         },
         { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` } },
       );
