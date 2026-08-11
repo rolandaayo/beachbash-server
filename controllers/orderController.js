@@ -109,11 +109,14 @@ async function createOrder(req, res) {
 
 // ── GET /api/orders/ticket/:id — public scan page endpoint ──────────────────
 async function getTicketPublic(req, res) {
-  const order = await Order.findOne({ orderId: req.params.id, status: "paid" });
+  const order = await Order.findOne({ orderId: req.params.id });
   if (!order) {
+    return res.status(404).json({ error: "Ticket not found" });
+  }
+  if (order.status !== "paid") {
     return res
-      .status(404)
-      .json({ error: "Ticket not found or payment not confirmed" });
+      .status(402)
+      .json({ error: "Payment not yet confirmed", status: order.status });
   }
   res.json({
     valid: true,
