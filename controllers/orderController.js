@@ -1,10 +1,17 @@
 const crypto = require("crypto");
 const axios = require("axios");
 const Order = require("../models/Order");
+const { sendTicketEmail } = require("../lib/mailer");
 
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY || "";
 
-// ── POST /api/orders — place order + init Paystack payment ──────────────────
+// ── Temporary in-memory store for pending (unpaid) orders ────────────────────
+// Keyed by orderId (Paystack reference). Entries are removed after 2 hours or
+// when the webhook confirms payment. Nothing touches MongoDB until payment succeeds.
+const pendingOrders = new Map();
+const PENDING_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+// ── POST /api/orders — init Paystack, hold data in memory only ───────────────
 async function createOrder(req, res) {
   const { customer, tickets, total } = req.body;
 
@@ -32,7 +39,7 @@ async function createOrder(req, res) {
   const orderId = `BB-${Date.now().toString(36).toUpperCase()}`;
   const userId = req.user?.id || null;
 
-  const order = await Order.create({
+  const orderData = {
     orderId,
     userId,
     customer: {
@@ -43,10 +50,18 @@ async function createOrder(req, res) {
     },
     tickets,
     total,
-    status: "pending_payment",
-  });
+    createdAt: new Date().toISOString(),
+  };
 
-  console.log(`[ORDER] Created ${orderId} — ₦${total.toLocaleString()}`);
+  // Hold in memory — do NOT save to DB yet
+  pendingOrders.set(orderId, orderData);
+
+  // Auto-evict after TTL
+  setTimeout(() => pendingOrders.delete(orderId), PENDING_TTL_MS);
+
+  console.log(
+    `[ORDER] Pending (not saved): ${orderId} — ₦${total.toLocaleString()}`,
+  );
 
   // ── Init Paystack transaction ────────────────────────────────────────────
   let paystackData = null;
@@ -55,18 +70,18 @@ async function createOrder(req, res) {
       const { data } = await axios.post(
         "https://api.paystack.co/transaction/initialize",
         {
-          email: order.customer.email,
-          amount: total * 100, // Paystack uses kobo
+          email: orderData.customer.email,
+          amount: total * 100,
           reference: orderId,
           metadata: {
             orderId,
-            name: `${order.customer.firstName} ${order.customer.lastName}`,
+            name: `${orderData.customer.firstName} ${orderData.customer.lastName}`,
           },
           callback_url: `${process.env.CLIENT_URL || "http://localhost:3000"}/confirmation?orderId=${orderId}`,
         },
         { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` } },
       );
-      paystackData = data.data; // { authorization_url, access_code, reference }
+      paystackData = data.data;
       console.log(`[PAYSTACK] Init OK: ${orderId}`);
     } catch (err) {
       console.error(
@@ -79,8 +94,36 @@ async function createOrder(req, res) {
   res.status(201).json({
     orderId,
     status: "pending_payment",
-    message: "Order placed. Proceed to payment.",
+    message: "Payment initialised. Awaiting confirmation.",
     paystack: paystackData,
+  });
+}
+
+// ── GET /api/orders/ticket/:id — public scan page endpoint ──────────────────
+async function getTicketPublic(req, res) {
+  const order = await Order.findOne({ orderId: req.params.id, status: "paid" });
+  if (!order) {
+    return res
+      .status(404)
+      .json({ error: "Ticket not found or payment not confirmed" });
+  }
+  res.json({
+    valid: true,
+    orderId: order.orderId,
+    firstName: order.customer.firstName,
+    lastName: order.customer.lastName,
+    email: order.customer.email,
+    phone: order.customer.phone,
+    tickets: order.tickets.map((t) => ({
+      name: t.name,
+      quantity: t.quantity,
+      price: t.price,
+      total: t.price * t.quantity,
+    })),
+    total: order.total,
+    paidAt: order.paidAt,
+    checkedIn: order.checkedIn,
+    checkedInAt: order.checkedInAt,
   });
 }
 
@@ -99,12 +142,11 @@ async function getOrder(req, res) {
 
 // ── POST /api/orders/paystack/webhook ────────────────────────────────────────
 async function paystackWebhook(req, res) {
-  const secret = PAYSTACK_SECRET;
-  if (!secret) return res.sendStatus(200); // no-op if not configured
+  if (!PAYSTACK_SECRET) return res.sendStatus(200);
 
-  // Verify Paystack signature
+  // Verify Paystack HMAC signature
   const hash = crypto
-    .createHmac("sha512", secret)
+    .createHmac("sha512", PAYSTACK_SECRET)
     .update(JSON.stringify(req.body))
     .digest("hex");
 
@@ -115,31 +157,103 @@ async function paystackWebhook(req, res) {
   const { event, data } = req.body;
 
   if (event === "charge.success") {
-    const order = await Order.findOne({ orderId: data.reference });
-    if (order && order.status !== "paid") {
-      order.status = "paid";
-      order.paystackRef = data.reference;
-      order.paystackChannel = data.channel;
-      order.paidAt = new Date();
-      await order.save();
+    const reference = data.reference;
 
-      console.log(`[PAYSTACK] Payment confirmed: ${order.orderId}`);
+    // Avoid double-processing
+    const existing = await Order.findOne({ orderId: reference });
+    if (existing) {
+      console.log(`[PAYSTACK] Already processed: ${reference}`);
+      return res.sendStatus(200);
+    }
 
-      // Push to admin via Socket.io
-      const io = req.app.get("io");
-      if (io) {
-        io.to("admin").emit("order_paid", {
-          orderId: order.orderId,
-          total: order.total,
-          customer: order.customer,
-          paidAt: order.paidAt,
-          paystackRef: order.paystackRef,
-        });
-      }
+    // Retrieve the pending order data
+    const pending = pendingOrders.get(reference);
+
+    if (!pending) {
+      // Shouldn't happen in normal flow, but handle gracefully
+      console.warn(
+        `[PAYSTACK] No pending data for: ${reference} — creating from webhook`,
+      );
+    }
+
+    // Build order from pending data or fall back to webhook metadata
+    const orderPayload = pending || {
+      orderId: reference,
+      userId: null,
+      customer: {
+        firstName: data.metadata?.name?.split(" ")[0] || "Unknown",
+        lastName: data.metadata?.name?.split(" ").slice(1).join(" ") || "",
+        email: data.customer?.email || "",
+        phone: "",
+      },
+      tickets: [],
+      total: data.amount / 100,
+      createdAt: new Date().toISOString(),
+    };
+
+    // NOW save to MongoDB — only on successful payment
+    const order = await Order.create({
+      orderId: orderPayload.orderId,
+      userId: orderPayload.userId,
+      customer: orderPayload.customer,
+      tickets: orderPayload.tickets,
+      total: orderPayload.total,
+      status: "paid",
+      paystackRef: reference,
+      paystackChannel: data.channel,
+      paidAt: new Date(),
+    });
+
+    // Clean up memory
+    pendingOrders.delete(reference);
+
+    console.log(`[PAYSTACK] Payment confirmed & order saved: ${order.orderId}`);
+
+    // Send QR ticket email (fire-and-forget)
+    sendTicketEmail(order).catch((err) =>
+      console.error("[MAIL] Ticket email failed:", err.message),
+    );
+
+    // Push to admin via Socket.io
+    const io = req.app.get("io");
+    if (io) {
+      io.to("admin").emit("order_paid", {
+        orderId: order.orderId,
+        total: order.total,
+        customer: order.customer,
+        paidAt: order.paidAt,
+        paystackRef: order.paystackRef,
+      });
     }
   }
 
   res.sendStatus(200);
+}
+
+// ── PATCH /api/orders/:id/checkin (admin) ───────────────────────────────────
+async function checkInOrder(req, res) {
+  const order = await Order.findOne({ orderId: req.params.id });
+  if (!order) return res.status(404).json({ error: "Order not found" });
+  if (order.status !== "paid")
+    return res.status(400).json({ error: "Order is not paid" });
+
+  order.checkedIn = !order.checkedIn; // toggle
+  order.checkedInAt = order.checkedIn ? new Date() : null;
+  await order.save();
+
+  res.json({
+    orderId: order.orderId,
+    checkedIn: order.checkedIn,
+    checkedInAt: order.checkedInAt,
+  });
+}
+
+// ── DELETE /api/orders/:id (admin) ──────────────────────────────────────────
+async function deleteOrder(req, res) {
+  const order = await Order.findOneAndDelete({ orderId: req.params.id });
+  if (!order) return res.status(404).json({ error: "Order not found" });
+  console.log(`[ORDER] Deleted ${req.params.id}`);
+  res.json({ message: "Order deleted", orderId: req.params.id });
 }
 
 // ── PATCH /api/orders/:id/status (admin manual override) ────────────────────
@@ -177,6 +291,9 @@ module.exports = {
   createOrder,
   listOrders,
   getOrder,
+  getTicketPublic,
   paystackWebhook,
   updateOrderStatus,
+  checkInOrder,
+  deleteOrder,
 };

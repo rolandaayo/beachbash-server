@@ -13,7 +13,7 @@ const ticketLineSchema = new mongoose.Schema(
 const orderSchema = new mongoose.Schema(
   {
     orderId: { type: String, required: true, unique: true, index: true },
-    userId: { type: String, default: null }, // null for guest checkouts
+    userId: { type: String, default: null },
     customer: {
       firstName: String,
       lastName: String,
@@ -30,6 +30,8 @@ const orderSchema = new mongoose.Schema(
     paystackRef: { type: String, default: null },
     paystackChannel: { type: String, default: null },
     paidAt: { type: Date, default: null },
+    checkedIn: { type: Boolean, default: false },
+    checkedInAt: { type: Date, default: null },
   },
   { timestamps: true },
 );

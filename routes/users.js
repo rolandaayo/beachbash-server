@@ -3,13 +3,14 @@ const router = express.Router();
 const adminOnly = require("../middleware/adminOnly");
 const {
   listUsers,
+  listAllPeople,
   getUser,
   createUser,
   updateUser,
   deleteUser,
 } = require("../controllers/userController");
 
-// All user management routes require admin secret
+router.get("/all", adminOnly, listAllPeople); // merged registered + guests
 router.get("/", adminOnly, listUsers);
 router.get("/:id", adminOnly, getUser);
 router.post("/", adminOnly, createUser);
