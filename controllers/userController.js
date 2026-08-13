@@ -1,6 +1,7 @@
 const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const Order = require("../models/Order");
+const { sendTicketEmail } = require("../lib/mailer");
 
 // ── GET /api/users — list all users ─────────────────────────────────────────
 async function listUsers(req, res) {
@@ -176,6 +177,31 @@ async function deleteUser(req, res) {
   res.json({ message: "User deleted", id: req.params.id });
 }
 
+// ── POST /api/users/:id/send-qr — send latest paid order QR to user's email ─
+async function sendQrToUser(req, res) {
+  const user = await User.findById(req.params.id).select("-passwordHash");
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  // Find the most recent paid order for this user's email
+  const orders = await Order.find({
+    "customer.email": user.email.toLowerCase(),
+    status: "paid",
+  }).sort({ paidAt: -1 }).limit(1);
+
+  if (!orders || orders.length === 0)
+    return res.status(404).json({ error: "No paid orders found for this user" });
+
+  const order = orders[0];
+
+  try {
+    await sendTicketEmail(order);
+    res.json({ message: "QR email sent" });
+  } catch (err) {
+    console.error("[MAIL] sendQrToUser error", err);
+    res.status(500).json({ error: "Failed to send email" });
+  }
+}
+
 module.exports = {
   listUsers,
   listAllPeople,
@@ -183,4 +209,5 @@ module.exports = {
   createUser,
   updateUser,
   deleteUser,
+  sendQrToUser,
 };

@@ -387,6 +387,20 @@ async function updateOrderStatus(req, res) {
   res.json({ order });
 }
 
+// ── POST /api/orders/:id/send-qr — admin: send ticket QR email for an order ──
+async function sendOrderQr(req, res) {
+  const order = await Order.findOne({ orderId: req.params.id });
+  if (!order) return res.status(404).json({ error: "Order not found" });
+
+  try {
+    await sendTicketEmail(order);
+    res.json({ message: "QR email sent" });
+  } catch (err) {
+    console.error("[MAIL] sendOrderQr error", err);
+    res.status(500).json({ error: "Failed to send email" });
+  }
+}
+
 module.exports = {
   createOrder,
   listOrders,
@@ -397,4 +411,5 @@ module.exports = {
   confirmPayment,
   checkInOrder,
   deleteOrder,
+  sendOrderQr,
 };

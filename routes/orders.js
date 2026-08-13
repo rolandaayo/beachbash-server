@@ -8,6 +8,7 @@ const {
   getOrder,
   getTicketPublic,
   updateOrderStatus,
+  sendOrderQr,
   confirmPayment,
   checkInOrder,
   deleteOrder,
