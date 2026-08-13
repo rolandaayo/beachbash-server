@@ -152,3 +152,47 @@ module.exports = {
   getConversation,
   adminReply,
 };
+
+// ── Admin: delete a conversation entirely ─────────────────────────────────
+async function deleteConversation(req, res) {
+  try {
+    const convo = await Conversation.findByIdAndDelete(req.params.id);
+    if (!convo) return res.status(404).json({ error: "Conversation not found" });
+    // Notify admins via socket
+    const io = req.app.get("io");
+    if (io) io.to("admin").emit("conversation_deleted", { conversationId: req.params.id });
+    res.json({ message: "Conversation deleted" });
+  } catch (err) {
+    console.error("[CHAT] deleteConversation:", err);
+    res.status(500).json({ error: "Failed to delete conversation" });
+  }
+}
+
+// ── Admin: delete a single message inside a conversation ────────────────
+async function deleteMessage(req, res) {
+  try {
+    const { id, messageId } = req.params;
+    const convo = await Conversation.findById(id);
+    if (!convo) return res.status(404).json({ error: "Conversation not found" });
+
+    const idx = convo.messages.findIndex((m) => (m._id || m.id || m.tempId) == messageId);
+    if (idx === -1) return res.status(404).json({ error: "Message not found" });
+
+    convo.messages.splice(idx, 1);
+    // Update lastMessage/unreadCount conservatively
+    convo.lastMessage = convo.messages.length ? convo.messages[convo.messages.length - 1].text : "";
+    convo.unreadCount = Math.max(0, (convo.unreadCount || 0) - 1);
+    await convo.save();
+
+    const io = req.app.get("io");
+    if (io) io.to("admin").emit("message_deleted", { conversationId: id, messageId });
+
+    res.json({ message: "Message deleted" });
+  } catch (err) {
+    console.error("[CHAT] deleteMessage:", err);
+    res.status(500).json({ error: "Failed to delete message" });
+  }
+}
+
+module.exports.deleteConversation = deleteConversation;
+module.exports.deleteMessage = deleteMessage;

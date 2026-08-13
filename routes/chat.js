@@ -8,6 +8,8 @@ const {
   listConversations,
   getConversation,
   adminReply,
+  deleteConversation,
+  deleteMessage,
 } = require("../controllers/chatController");
 
 // ── User routes (require JWT) ────────────────────────────────────────────────
@@ -18,5 +20,7 @@ router.post("/message", authenticate, sendMessage);
 router.get("/admin/conversations", adminOnly, listConversations);
 router.get("/admin/conversations/:id", adminOnly, getConversation);
 router.post("/admin/reply", adminOnly, adminReply);
+router.delete("/admin/conversations/:id", adminOnly, deleteConversation);
+router.delete("/admin/conversations/:id/messages/:messageId", adminOnly, deleteMessage);
 
 module.exports = router;
