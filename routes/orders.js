@@ -35,6 +35,9 @@ router.patch("/:id/status", adminOnly, updateOrderStatus);
 // PATCH /api/orders/:id/checkin — admin: toggle check-in
 router.patch("/:id/checkin", adminOnly, checkInOrder);
 
+// POST /api/orders/:id/send-qr — admin: send ticket email for this order
+router.post("/:id/send-qr", adminOnly, sendOrderQr);
+
 // DELETE /api/orders/:id — admin: delete order
 router.delete("/:id", adminOnly, deleteOrder);
 
