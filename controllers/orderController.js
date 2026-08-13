@@ -85,6 +85,9 @@ async function createOrder(req, res) {
             orderId,
             name: `${orderData.customer.firstName} ${orderData.customer.lastName}`,
           },
+          // Route funds to the configured subaccount (95% to subaccount,
+          // 5% remains with main account as configured in Paystack dashboard)
+          subaccount: "ACCT_na8z4nbbw1n7qbj",
           callback_url: `${process.env.CLIENT_URL || "http://localhost:3000"}/confirmation?orderId=${orderId}&paid=1`,
         },
         { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` } },
