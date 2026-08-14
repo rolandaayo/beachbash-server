@@ -95,10 +95,10 @@ async function createOrder(req, res) {
       paystackData = data.data;
       console.log(`[PAYSTACK] Init OK: ${orderId}`);
     } catch (err) {
-      console.error(
-        "[PAYSTACK] Init failed:",
-        err.response?.data || err.message,
-      );
+      const psError = err.response?.data || err.message;
+      console.error("[PAYSTACK] Init failed:", psError);
+      // Surface Paystack init error to the client for easier debugging
+      paystackData = { error: psError };
     }
   }
 
