@@ -4,7 +4,9 @@ const adminOnly = require("../middleware/adminOnly");
 const optionalAuth = require("../middleware/optionalAuth");
 const {
   createOrder,
+  abandonOrder,
   listOrders,
+  listAbandonedOrders,
   getOrder,
   getTicketPublic,
   updateOrderStatus,
@@ -23,8 +25,14 @@ router.post("/:id/confirm", confirmPayment);
 // POST /api/orders — create order (guest or logged-in)
 router.post("/", optionalAuth, createOrder);
 
-// GET /api/orders — admin: list all orders
+// POST /api/orders/:id/abandon — client calls this when payment is cancelled
+router.post("/:id/abandon", abandonOrder);
+
+// GET /api/orders — admin: list all orders (paid/confirmed only)
 router.get("/", adminOnly, listOrders);
+
+// GET /api/orders/abandoned — admin: list cancelled/expired attempts
+router.get("/abandoned", adminOnly, listAbandonedOrders);
 
 // GET /api/orders/:id — get by orderId string
 router.get("/:id", getOrder);
