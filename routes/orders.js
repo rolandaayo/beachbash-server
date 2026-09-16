@@ -28,13 +28,14 @@ router.post("/", optionalAuth, createOrder);
 // POST /api/orders/:id/abandon — client calls this when payment is cancelled
 router.post("/:id/abandon", abandonOrder);
 
-// GET /api/orders — admin: list all orders (paid/confirmed only)
+// GET /api/orders — admin: list all confirmed/paid orders
 router.get("/", adminOnly, listOrders);
 
 // GET /api/orders/abandoned — admin: list cancelled/expired attempts
+// Must be registered BEFORE /:id so Express doesn't treat "abandoned" as an id
 router.get("/abandoned", adminOnly, listAbandonedOrders);
 
-// GET /api/orders/:id — get by orderId string
+// GET /api/orders/:id — get a single order by orderId string
 router.get("/:id", getOrder);
 
 // PATCH /api/orders/:id/status — admin: manually update status
