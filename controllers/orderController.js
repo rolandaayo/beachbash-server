@@ -487,6 +487,17 @@ async function sendOrderQr(req, res) {
   }
 }
 
+// ── DELETE /api/orders/abandoned/:id (admin) ────────────────────────────────
+async function deleteAbandonedOrder(req, res) {
+  const order = await AbandonedOrder.findOneAndDelete({
+    orderId: req.params.id,
+  });
+  if (!order)
+    return res.status(404).json({ error: "Abandoned order not found" });
+  console.log(`[ORDER] Abandoned order deleted: ${req.params.id}`);
+  res.json({ message: "Abandoned order deleted", orderId: req.params.id });
+}
+
 module.exports = {
   createOrder,
   abandonOrder,
@@ -499,5 +510,6 @@ module.exports = {
   confirmPayment,
   checkInOrder,
   deleteOrder,
+  deleteAbandonedOrder,
   sendOrderQr,
 };

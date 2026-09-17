@@ -14,6 +14,7 @@ const {
   confirmPayment,
   checkInOrder,
   deleteOrder,
+  deleteAbandonedOrder,
 } = require("../controllers/orderController");
 
 // Ticket scan — public, no auth
@@ -34,6 +35,9 @@ router.get("/", adminOnly, listOrders);
 // GET /api/orders/abandoned — admin: list cancelled/expired attempts
 // Must be registered BEFORE /:id so Express doesn't treat "abandoned" as an id
 router.get("/abandoned", adminOnly, listAbandonedOrders);
+
+// DELETE /api/orders/abandoned/:id — admin: delete a single abandoned attempt
+router.delete("/abandoned/:id", adminOnly, deleteAbandonedOrder);
 
 // GET /api/orders/:id — get a single order by orderId string
 router.get("/:id", getOrder);
