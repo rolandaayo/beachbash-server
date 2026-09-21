@@ -11,8 +11,10 @@ const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY || "";
 // If the ticketId is unknown or the client sends a wrong price, the server
 // uses the authoritative price from here — the client can never fake a discount.
 const TICKET_CATALOGUE = {
-  "regular-girls": { name: "Regular — Girls", price: 25000 },
-  "regular-guys": { name: "Regular — Guys", price: 40000 },
+  "regular-girls-25": { name: "Girls — ₦25k", price: 25000 },
+  "regular-girls-40": { name: "Girls — ₦40k", price: 40000 },
+  "regular-guys-40": { name: "Guys — ₦40k", price: 40000 },
+  "regular-guys-60": { name: "Guys — ₦60k", price: 60000 },
   "table-700": { name: "Table 700K", price: 700000 },
   "table-1m": { name: "Table 1M", price: 1000000 },
   "table-1.5m": { name: "Table 1.5M", price: 1500000 },

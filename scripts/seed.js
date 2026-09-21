@@ -10,8 +10,10 @@ const User = require("../models/User");
 const Order = require("../models/Order");
 
 const TICKETS = [
-  { ticketId: "regular-girls", name: "Regular — Girls", price: 25000 },
-  { ticketId: "regular-guys", name: "Regular — Guys", price: 40000 },
+  { ticketId: "regular-girls-25", name: "Girls — ₦25k", price: 25000 },
+  { ticketId: "regular-girls-40", name: "Girls — ₦40k", price: 40000 },
+  { ticketId: "regular-guys-40", name: "Guys — ₦40k", price: 40000 },
+  { ticketId: "regular-guys-60", name: "Guys — ₦60k", price: 60000 },
   { ticketId: "table-700", name: "Table 700K", price: 700000 },
   { ticketId: "table-1m", name: "Table 1M", price: 1000000 },
   { ticketId: "table-1.5m", name: "Table 1.5M", price: 1500000 },
