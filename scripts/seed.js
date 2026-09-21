@@ -10,8 +10,8 @@ const User = require("../models/User");
 const Order = require("../models/Order");
 
 const TICKETS = [
-  { ticketId: "regular-girls", name: "Regular — Girls", price: 40000 },
-  { ticketId: "regular-guys", name: "Regular — Guys", price: 60000 },
+  { ticketId: "regular-girls", name: "Regular — Girls", price: 25000 },
+  { ticketId: "regular-guys", name: "Regular — Guys", price: 40000 },
   { ticketId: "table-700", name: "Table 700K", price: 700000 },
   { ticketId: "table-1m", name: "Table 1M", price: 1000000 },
   { ticketId: "table-1.5m", name: "Table 1.5M", price: 1500000 },
@@ -105,7 +105,9 @@ async function seed() {
 
   if (fresh) {
     await Order.deleteMany({});
-    await User.deleteMany({ email: { $regex: /@(gmail|yahoo|outlook|icloud)\.com$/ } });
+    await User.deleteMany({
+      email: { $regex: /@(gmail|yahoo|outlook|icloud)\.com$/ },
+    });
     console.log("Cleared existing seed data");
   }
 
@@ -145,7 +147,16 @@ async function seed() {
   }
   console.log(`Users ready: ${users.length}`);
 
-  const statuses = ["paid", "paid", "paid", "paid", "paid", "pending_payment", "pending_payment", "failed"];
+  const statuses = [
+    "paid",
+    "paid",
+    "paid",
+    "paid",
+    "paid",
+    "pending_payment",
+    "pending_payment",
+    "failed",
+  ];
   const channels = ["card", "bank", "ussd", "bank_transfer"];
   const orders = [];
 
@@ -157,7 +168,8 @@ async function seed() {
     const createdAt = daysAgo(randInt(0, 14));
     const orderId = `BB-${Date.now().toString(36).toUpperCase()}${i}`;
 
-    const linkedUser = Math.random() > 0.4 ? pick(users.filter((u) => u.role === "user")) : null;
+    const linkedUser =
+      Math.random() > 0.4 ? pick(users.filter((u) => u.role === "user")) : null;
 
     const order = await Order.create({
       orderId,
@@ -173,7 +185,10 @@ async function seed() {
       status,
       paystackRef: status === "paid" ? orderId : null,
       paystackChannel: status === "paid" ? pick(channels) : null,
-      paidAt: status === "paid" ? new Date(createdAt.getTime() + randInt(1, 30) * 60000) : null,
+      paidAt:
+        status === "paid"
+          ? new Date(createdAt.getTime() + randInt(1, 30) * 60000)
+          : null,
       createdAt,
       updatedAt: createdAt,
     });

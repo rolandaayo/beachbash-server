@@ -6,6 +6,18 @@ const { sendTicketEmail } = require("../lib/mailer");
 
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY || "";
 
+// ── Canonical ticket catalogue (single source of truth for prices) ───────────
+// Any ticket line sent by the client is validated against this map.
+// If the ticketId is unknown or the client sends a wrong price, the server
+// uses the authoritative price from here — the client can never fake a discount.
+const TICKET_CATALOGUE = {
+  "regular-girls": { name: "Regular — Girls", price: 25000 },
+  "regular-guys": { name: "Regular — Guys", price: 40000 },
+  "table-700": { name: "Table 700K", price: 700000 },
+  "table-1m": { name: "Table 1M", price: 1000000 },
+  "table-1.5m": { name: "Table 1.5M", price: 1500000 },
+};
+
 // ── Temporary in-memory store for pending (unpaid) orders ────────────────────
 // Keyed by orderId (Paystack reference). Entries are removed after 2 hours or
 // when the webhook confirms payment. NOTHING touches the orders collection in
@@ -59,6 +71,38 @@ async function createOrder(req, res) {
     return res.status(400).json({ error: "Invalid email address" });
   }
 
+  // ── Validate & sanitise ticket lines against the server catalogue ────────
+  // Ignore whatever price the client sent — use only the server's authoritative
+  // price for each ticketId so no one can buy a ₦700k table for ₦1.
+  const sanitisedTickets = [];
+  for (const line of tickets) {
+    if (
+      !line.ticketId ||
+      !Number.isInteger(line.quantity) ||
+      line.quantity < 1
+    ) {
+      return res.status(400).json({ error: "Invalid ticket line" });
+    }
+    const catalogueEntry = TICKET_CATALOGUE[line.ticketId];
+    if (!catalogueEntry) {
+      return res
+        .status(400)
+        .json({ error: `Unknown ticket type: ${line.ticketId}` });
+    }
+    sanitisedTickets.push({
+      ticketId: line.ticketId,
+      name: catalogueEntry.name, // use server name, not client
+      price: catalogueEntry.price, // use server price, not client
+      quantity: line.quantity,
+    });
+  }
+
+  // Recalculate total server-side — never trust the client's total
+  const serverTotal = sanitisedTickets.reduce(
+    (sum, t) => sum + t.price * t.quantity,
+    0,
+  );
+
   const orderId = `BB-${Date.now().toString(36).toUpperCase()}`;
   const userId = req.user?.id || null;
 
@@ -71,8 +115,8 @@ async function createOrder(req, res) {
       email: customer.email.trim().toLowerCase(),
       phone: customer.phone.trim(),
     },
-    tickets,
-    total,
+    tickets: sanitisedTickets,
+    total: serverTotal,
     createdAt: new Date().toISOString(),
   };
 
@@ -84,7 +128,7 @@ async function createOrder(req, res) {
   schedulePendingExpiry(orderId);
 
   console.log(
-    `[ORDER] Pending (memory only): ${orderId} — ₦${total.toLocaleString()}`,
+    `[ORDER] Pending (memory only): ${orderId} — ₦${serverTotal.toLocaleString()}`,
   );
 
   // ── Init Paystack transaction ────────────────────────────────────────────
@@ -95,7 +139,7 @@ async function createOrder(req, res) {
         "https://api.paystack.co/transaction/initialize",
         {
           email: orderData.customer.email,
-          amount: total * 100,
+          amount: serverTotal * 100,
           reference: orderId,
           metadata: {
             orderId,
@@ -119,6 +163,7 @@ async function createOrder(req, res) {
 
   res.status(201).json({
     orderId,
+    total: serverTotal,
     status: "pending_payment",
     message: "Payment initialised. Awaiting confirmation.",
     paystack: paystackData,
