@@ -145,10 +145,24 @@ async function adminReply(req, res) {
   }
 }
 
+// ── DELETE /api/chat/admin/conversations/:id — admin: delete a conversation ──
+async function deleteConversation(req, res) {
+  try {
+    const convo = await Conversation.findByIdAndDelete(req.params.id);
+    if (!convo)
+      return res.status(404).json({ error: "Conversation not found" });
+    res.json({ message: "Conversation deleted", id: req.params.id });
+  } catch (err) {
+    console.error("[CHAT] deleteConversation:", err);
+    res.status(500).json({ error: "Failed to delete conversation" });
+  }
+}
+
 module.exports = {
   getOrCreateConversation,
   sendMessage,
   listConversations,
   getConversation,
   adminReply,
+  deleteConversation,
 };

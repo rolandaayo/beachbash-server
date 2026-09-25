@@ -122,15 +122,29 @@ async function createOrder(req, res) {
     createdAt: new Date().toISOString(),
   };
 
-  // Store ONLY in memory — no DB write until payment succeeds.
-  // The webhook (charge.success) or confirmPayment endpoint will create the
-  // real Order document. If neither fires within PENDING_TTL_MS the attempt
-  // is archived as an AbandonedOrder.
+  // Store in memory for fast webhook lookup
   pendingOrders.set(orderId, orderData);
   schedulePendingExpiry(orderId);
 
+  // Also write to DB as pending_payment so data is never lost if server restarts.
+  // The webhook / confirmPayment will upgrade this to "paid".
+  // It will NOT appear in "All Orders" or "Successful Purchases" until status = "paid".
+  try {
+    await Order.create({
+      orderId,
+      userId,
+      customer: orderData.customer,
+      tickets: sanitisedTickets,
+      total: serverTotal,
+      status: "pending_payment",
+    });
+  } catch (err) {
+    // Duplicate key — order already exists (shouldn't happen, but safe to ignore)
+    console.warn(`[ORDER] DB create skipped (duplicate?): ${orderId}`);
+  }
+
   console.log(
-    `[ORDER] Pending (memory only): ${orderId} — ₦${serverTotal.toLocaleString()}`,
+    `[ORDER] Initialised: ${orderId} — ₦${serverTotal.toLocaleString()}`,
   );
 
   // ── Init Paystack transaction ────────────────────────────────────────────
@@ -213,10 +227,12 @@ async function confirmPayment(req, res) {
   const { reference } = req.body; // Paystack transaction reference
   const orderId = req.params.id;
 
-  // Check if already saved (webhook may have beaten us to it)
-  const existing = await Order.findOne({ orderId });
-  if (existing && existing.status === "paid") {
-    return res.json({ success: true, orderId: existing.orderId });
+  // Always look up from DB first — it's written on createOrder now
+  const order = await Order.findOne({ orderId });
+
+  // Already paid — webhook beat us to it, or called twice
+  if (order && order.status === "paid") {
+    return res.json({ success: true, orderId: order.orderId });
   }
 
   // Verify with Paystack if secret key is configured
@@ -236,48 +252,59 @@ async function confirmPayment(req, res) {
         "[CONFIRM] Paystack verify failed:",
         err.response?.data || err.message,
       );
-      // Don't block — fall through and create order (webhook will double-check)
+      // Don't block on verify failure — webhook will double-check
     }
   }
 
-  // Retrieve pending data from memory (may still be there if webhook hasn't fired)
-  const pending = pendingOrders.get(orderId);
-  if (!pending && !existing) {
-    return res.status(404).json({ error: "Order not found" });
-  }
-
-  let order = existing;
   if (!order) {
-    // First time we're seeing this confirmed payment — create the order now
-    const payload = pending || {
-      orderId,
-      userId: null,
-      customer: {},
-      tickets: [],
-      total: 0,
-    };
-    order = await Order.create({
-      orderId: payload.orderId,
-      userId: payload.userId,
-      customer: payload.customer,
-      tickets: payload.tickets,
-      total: payload.total,
+    // Very unlikely — means createOrder never wrote to DB (restart scenario).
+    // Try to recover from in-memory pending store.
+    const pending = pendingOrders.get(orderId);
+    if (!pending) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+    const newOrder = await Order.create({
+      orderId: pending.orderId,
+      userId: pending.userId,
+      customer: pending.customer,
+      tickets: pending.tickets,
+      total: pending.total,
       status: "paid",
       paystackRef: reference || null,
       paidAt: new Date(),
     });
-  } else {
-    order.status = "paid";
-    order.paystackRef = reference || order.paystackRef;
-    order.paidAt = new Date();
-    await order.save();
+    pendingOrders.delete(orderId);
+    AbandonedOrder.deleteOne({ orderId }).catch(() => {});
+    console.log(
+      `[CONFIRM] Order recovered from memory and saved as paid: ${orderId}`,
+    );
+    sendTicketEmail(newOrder).catch((err) =>
+      console.error("[MAIL] Ticket email failed:", err.message),
+    );
+    const io = req.app.get("io");
+    if (io) {
+      io.to("admin").emit("order_paid", {
+        orderId: newOrder.orderId,
+        total: newOrder.total,
+        customer: newOrder.customer,
+        paidAt: newOrder.paidAt,
+        paystackRef: newOrder.paystackRef,
+      });
+    }
+    return res.json({ success: true, orderId: newOrder.orderId });
   }
 
-  // Clean up memory and any abandoned record (user retried and paid)
+  // Order exists as pending_payment — mark it paid now
+  order.status = "paid";
+  order.paystackRef = reference || order.paystackRef;
+  order.paidAt = new Date();
+  await order.save();
+
+  // Clean up memory and any abandoned record
   pendingOrders.delete(orderId);
   AbandonedOrder.deleteOne({ orderId }).catch(() => {});
 
-  console.log(`[CONFIRM] Order saved as paid: ${orderId}`);
+  console.log(`[CONFIRM] Order marked paid: ${orderId}`);
 
   // Send ticket email
   sendTicketEmail(order).catch((err) =>
@@ -368,76 +395,58 @@ async function paystackWebhook(req, res) {
   if (event === "charge.success") {
     const reference = data.reference;
 
-    // Avoid double-processing
+    // Look up by orderId (which equals the Paystack reference)
     const existing = await Order.findOne({ orderId: reference });
+
+    // Already paid — idempotent, nothing to do
     if (existing && existing.status === "paid") {
       console.log(`[PAYSTACK] Already paid: ${reference}`);
       return res.sendStatus(200);
     }
 
-    // Retrieve pending data from memory
-    const pending = pendingOrders.get(reference);
-
-    if (!pending && !existing) {
-      console.warn(
-        `[PAYSTACK] No pending data for: ${reference} — creating from webhook`,
-      );
-    }
-
-    // Build order payload from pending memory, existing DB record, or raw webhook data
-    const orderPayload =
-      pending ||
-      (existing
-        ? {
-            orderId: existing.orderId,
-            userId: existing.userId,
-            customer: existing.customer,
-            tickets: existing.tickets,
-            total: existing.total,
-          }
-        : {
-            orderId: reference,
-            userId: null,
-            customer: {
-              firstName: data.metadata?.name?.split(" ")[0] || "Unknown",
-              lastName:
-                data.metadata?.name?.split(" ").slice(1).join(" ") || "",
-              email: data.customer?.email || "",
-              phone: "",
-            },
-            tickets: [],
-            total: data.amount / 100,
-          });
-
     let order;
     if (existing) {
-      // Order was pre-created somehow — just mark it paid
+      // Normal path — order is in DB as pending_payment, upgrade to paid
       existing.status = "paid";
       existing.paystackRef = reference;
       existing.paystackChannel = data.channel;
       existing.paidAt = new Date();
       await existing.save();
       order = existing;
-      console.log(`[PAYSTACK] Existing order marked paid: ${order.orderId}`);
+      console.log(`[PAYSTACK] Order marked paid: ${order.orderId}`);
     } else {
-      // First confirmation — create the order record now (only on success)
+      // Fallback — server restarted between createOrder and payment, try memory
+      const pending = pendingOrders.get(reference);
+      console.warn(
+        `[PAYSTACK] Order not in DB for: ${reference} — ${pending ? "recovering from memory" : "creating from webhook data"}`,
+      );
+      const payload = pending || {
+        orderId: reference,
+        userId: null,
+        customer: {
+          firstName: data.metadata?.name?.split(" ")[0] || "Unknown",
+          lastName: data.metadata?.name?.split(" ").slice(1).join(" ") || "",
+          email: data.customer?.email || "",
+          phone: "",
+        },
+        tickets: [],
+        total: data.amount / 100,
+      };
       order = await Order.create({
-        orderId: orderPayload.orderId,
-        userId: orderPayload.userId,
-        customer: orderPayload.customer,
-        tickets: orderPayload.tickets,
-        total: orderPayload.total,
+        orderId: payload.orderId,
+        userId: payload.userId,
+        customer: payload.customer,
+        tickets: payload.tickets,
+        total: payload.total,
         status: "paid",
         paystackRef: reference,
         paystackChannel: data.channel,
         paidAt: new Date(),
       });
-      console.log(
-        `[PAYSTACK] Payment confirmed & order saved: ${order.orderId}`,
-      );
+      console.log(`[PAYSTACK] Order created from fallback: ${order.orderId}`);
     }
 
-    // Clean up in-memory store and any abandoned record (user retried and paid)
+    // Clean up memory and any abandoned record (user retried and paid)
     pendingOrders.delete(reference);
     AbandonedOrder.deleteOne({ orderId: reference }).catch(() => {});
 
