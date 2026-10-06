@@ -7,7 +7,7 @@ What developers will find
 - Order endpoints to create orders (guest or authenticated), confirm payments, view tickets, and admin-only management (status, check-in, resend QR, delete).
 - Chat endpoints to let users send messages and admins reply, plus real-time Socket.io events for new messages and paid orders.
 
-Where to look in the code
+Where to look in the codehh
 - `index.js` — server bootstrap, Socket.io, webhook wiring
 - `routes/` — route definitions
 - `controllers/` — handlers and business logic
